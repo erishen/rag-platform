@@ -16,45 +16,11 @@
 本项目采用以下技术栈，开箱即可运行：
 
 - **存储**：PostgreSQL + pgvector，向量检索走 `cosine_distance` SQL（非全量入内存）。
-- **Embedding**：双后端——Ollama 优先（应用进程保持轻，仅用 `requests` 调 `/api/embeddings`），sentence-transformers 兜底（仅在无 Ollama 或需特定 BGE 模型且具备 CUDA 环境时，延迟 import `torch` 回退）。详见「Embedding 后端选型」。
+- **Embedding**：Ollama 进程外 HTTP 编码（应用进程保持轻，仅 `requests`），无 Ollama 时自动回退 sentence-transformers 进程内编码。
 - **词库闸门**：AhoCorasick 实现敏感词拦截 / 问答对直答 / 同义扩展；词库缓存用 Redis（双时间戳轮询重建），Redis 缺失时回退内存。词库来源为 `data/lexicon.json`（生产 RAG 通常从数据库表拉取词库，逻辑一致）。
 - **检索**：混合检索（hybrid retrieval）。对齐典型的纯向量检索方案（其只用 pgvector 向量相似度），本项目额外补一路 BM25；向量召回走 pgvector 的 `cosine_distance` SQL，两路各自 min-max 归一化后按权重融合，取 Top-K。
 - **生成**：OpenAI 兼容 LLM，仅依据召回片段作答，并加「不知道就答不知道」+ 引用约束防幻觉。
 - **审核流**：记录标记 active / disabled 两态。
-
-## Embedding 后端选型：HuggingFace BGE + CUDA vs Ollama
-
-二者是**同一件事的两种部署形态**——都是「本地跑 embedding 模型」，区别在模型怎么加载、谁来管 GPU。本项目 `app/embed/` 做成**双后端**正是踩在这个取舍上。
-
-| 维度 | HuggingFace BGE + CUDA | Ollama Embedding |
-|------|----------------------|------------------|
-| 模型加载 | `sentence-transformers` / `transformers` 在**应用进程内**直接 `model.encode()` | 调 Ollama 服务的 `/api/embeddings` HTTP 接口 |
-| GPU 管理 | 自己装 CUDA toolkit + 匹配版本的 torch，手动管显存 | Ollama 后台统一管（自动用 GPU / 量化，应用无感） |
-| 应用依赖 | 重：torch + transformers + CUDA，动辄几个 GB | 轻：只发 HTTP 请求（本项目仅 `import requests`） |
-| 冷启动 | 慢（模型权重载入显存，秒级~十秒） | 快（模型已在 Ollama 常驻，应用起来就能调） |
-| 吞吐 / 批处理 | **强**：进程内批量 encode，GPU 满血跑大语料快 | 较弱：每请求一次 HTTP + JSON 序列化开销 |
-| 模型选择 | 任意 HF 模型，维度 / 池化 / 后缀全可控 | 只限 Ollama 拉得到的模型（如 snowflake-arctic-embed2=1024、nomic-embed-text=768、bge 系列等） |
-| 运维负担 | 高：CUDA 驱动版本、torch CUDA build 匹配是经典坑 | 中：需多跑一个 Ollama 守护进程 |
-| 质量上限 | 选 BGE-large-zh / bge-m3 等大模型，中文 SOTA 级 | 取决于 Ollama 提供的模型，主流够用但顶级大模型不一定有 |
-
-### 质量本身
-
-两者**都用同一类模型**，质量差距主要在「你选了哪个模型」而非「用哪种方式加载」。BGE 系列为中文检索设计（bge-zh 系列、bge-m3 多语言），无论走 CUDA 还是 Ollama，向量质量一致；Ollama 上的 `snowflake-arctic-embed2`（1024 维）同样是强模型，本项目默认即用它。
-
-### 与本项目的关系
-
-`app/embed/` 的**双后端**正是这个取舍的工程落地：
-
-- **Ollama 优先**（主路径）：应用进程保持轻（热路径不拖 torch/CUDA），`make run` 起来就能用。
-- **sentence-transformers 兜底**：当本地没起 Ollama、或必须用某个特定 BGE 模型且有 CUDA 环境时回退到进程内跑。因此 `torch` / `sentence_transformers` 是**延迟 import**（`st_backend.py` 顶部 import，仅兜底路径触发），平时不占内存。
-
-### 选型建议
-
-- **学习 / 原型 / 中小语料**：Ollama 优先，省心且应用轻——即本项目默认。
-- **生产 / 大批量入库 / 成本控制**：BGE + CUDA 在进程内批量 encode，吞吐与单条成本都更优，值得扛一下 CUDA 环境的复杂度。
-- **要最灵活选模型**：BGE + CUDA（任意 HF 模型随便换）；Ollama 受限于其模型库里有什么。
-
-> 一句话：**Ollama 赢在「省事 + 应用轻」，BGE+CUDA 赢在「吞吐 + 模型自由度」**，质量上限看模型本身，不看加载方式。
 
 
 ## 目录结构
@@ -71,7 +37,7 @@ rag-platform/
 │   │   ├── base.py     # 后端抽象基类 EmbedBackend
 │   │   ├── core.py     # 后端选择 + 维度守卫 + 公共 API（真正逻辑）
 │   │   ├── ollama_backend.py   # Ollama HTTP 后端（仅 requests，主路径）
-│   │   └── st_backend.py       # sentence-transformers 后端（重依赖，仅兜底时延迟 import）
+│   │   └── st_backend.py       # sentence-transformers 后端（兜底路径，进程内编码）
 │   ├── bm25.py        # 从零实现的 Okapi BM25
 │   ├── lexicon.py     # AhoCorasick 词库闸门（Redis 缓存 + 双时间戳轮询，可回退内存）
 │   ├── retriever.py   # pgvector 向量召回 + BM25 融合 混合检索
@@ -108,7 +74,7 @@ rag-platform/
 make infra-up
 #   账号默认 rag:rag@localhost:5432/rag 与 .env 一致；无需 docker 时可自建服务并改 .env
 
-# 1. 创建 .venv 并安装依赖（sentence-transformers 会顺带装 torch，仅在回退到 st 后端时需要）
+# 1. 创建 .venv 并安装依赖
 uv sync
 
 # 2. 配置（必须填真实 LLM key，本项目无 mock）
