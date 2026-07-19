@@ -1,0 +1,46 @@
+[project]
+name = "rag-platform"
+version = "0.1.0"
+description = "极简 RAG 学习项目（原创代码）"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlmodel",
+    "pyahocorasick",
+    "jieba",
+    "numpy",
+    "openai",
+    "python-dotenv",
+    "requests",
+    "sentence-transformers",
+    # 存储层：PostgreSQL + pgvector 向量列 + Redis 词库缓存
+    "pgvector",
+    "psycopg[binary]",
+    "redis",
+]
+
+[tool.uv]
+# 应用类型项目：只装依赖到 .venv，不把本项目本身当作包安装/构建
+package = false
+
+[dependency-groups]
+dev = ["ruff", "pytest"]
+
+[tool.pytest.ini_options]
+# 把项目根加入 sys.path，使 tests/ 内能 `from app...` 导入（pytest 默认只加 tests/ 自身）
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "integration: 需要本地 PG+pgvector 基建（make infra-up），无基建自动 skip",
+]
+# 抑制 Starlette 框架内部弃用提示：starlette.testclient 自己用 httpx 又自己警告，
+# 属框架层噪音，咱们代码无法控制（换 TestClient 不值得），故在 pytest 层针对性忽略。
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

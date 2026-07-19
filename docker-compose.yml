@@ -1,0 +1,40 @@
+# 本地基建：PostgreSQL(+pgvector) + Redis
+# 本地基建存储层。用法：make infra-up / make infra-down / make infra-logs
+#
+# 默认账号与项目 .env 一致：
+#   Postgres  -> rag:rag@localhost:5432/rag
+#   Redis     -> localhost:6379
+services:
+  pg:
+    image: pgvector/pgvector:pg16
+    container_name: rag-platform-pg
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-platform-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
+  redisdata:

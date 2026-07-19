@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 本地配置（含密钥，切勿提交）
+.env
+
+# 运行时数据
+*.db
+data/*.db
+
+# 前后端一体启动（PID 文件 + 日志，切勿提交）
+.pids/
+logs/

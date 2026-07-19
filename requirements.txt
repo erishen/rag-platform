@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+pyahocorasick
+numpy
+openai
+python-dotenv
+sentence-transformers
